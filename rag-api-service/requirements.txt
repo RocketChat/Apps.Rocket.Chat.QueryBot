@@ -1,0 +1,11 @@
+langchain
+langchainhub
+chromadb
+huggingface_hub
+cohere
+llmx
+sentence-transformers
+accelerator
+sentencepiece
+tiktoken
+pypdf
