@@ -1,0 +1,16 @@
+{
+    "id": "49df3253-2187-46ed-b4e1-4982f200cb81",
+    "version": "0.0.1",
+    "requiredApiVersion": "^1.19.0",
+    "iconFile": "icon.png",
+    "author": {
+        "name": "Hunter",
+        "homepage": "hunter",
+        "support": "hunter"
+    },
+    "name": "chatBot",
+    "nameSlug": "chatbot",
+    "classFile": "ChatBotApp.ts",
+    "description": "A flexible AI query bot for any problem domain that operates based on a pre-configured RAG pipeline.",
+    "implements": []
+}
