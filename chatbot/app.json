@@ -11,6 +11,6 @@
     "name": "chatBot",
     "nameSlug": "chatbot",
     "classFile": "ChatBotApp.ts",
-    "description": "A flexible AI query bot for any problem domain that operates based on a pre-configured RAG pipeline.",
+    "description": "A flexible AI query bot for any problem domain.",
     "implements": []
 }

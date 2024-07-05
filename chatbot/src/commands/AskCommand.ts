@@ -8,13 +8,15 @@ import {
     ISlashCommand,
     SlashCommandContext,
 } from "@rocket.chat/apps-engine/definition/slashcommands";
-import { RagService } from "../services/RagService";
+import { LlmService } from "../services/LlmService";
 
 export class AskCommand implements ISlashCommand {
     public command = "ask";
-    public i18nParamsExample = "ask_params";
-    public i18nDescription = "Ask a question";
+    public i18nDescription = "Ask a question to the LLM";
+    public i18nParamsExample = "Your question";
     public providesPreview = false;
+
+    constructor(private readonly llmService: LlmService) {}
 
     public async executor(
         context: SlashCommandContext,
@@ -23,15 +25,38 @@ export class AskCommand implements ISlashCommand {
         http: IHttp,
         persis: IPersistence
     ): Promise<void> {
-        const args = context.getArguments();
+        const query = context.getArguments().join(" ");
+        const room = context.getRoom();
+        const userId = context.getSender().id;
 
-        const question = args.join(" ");
+        const model = (await read
+            .getEnvironmentReader()
+            .getSettings()
+            .getValueById("llm_endpoint")) as string;
 
-        if (!question) {
-            throw new Error("Please provide a question.");
-        }
+        const embedding = await this.llmService.createEmbedding(query);
 
-        const ragService = new RagService(read, modify, http, persis);
-        await ragService.handleQuery(context, question);
+        const messageIds = await this.llmService.queryVectorDB(embedding);
+
+        const messages = await Promise.all(
+            messageIds.map((id) => this.llmService.getMessageById(id, read))
+        );
+        const contextText = messages.join(" ");
+
+        const combinedQuery = `Context: ${contextText}\n\nQuestion: ${query}`;
+
+        const response = await this.llmService.queryLLM(
+            model,
+            combinedQuery,
+            userId
+        );
+
+        const builder = modify
+            .getCreator()
+            .startMessage()
+            .setRoom(room)
+            .setText(response);
+
+        await modify.getCreator().finish(builder);
     }
 }
