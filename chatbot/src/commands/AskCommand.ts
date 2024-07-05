@@ -3,20 +3,26 @@ import {
     IModify,
     IPersistence,
     IRead,
+    IAppAccessors,
 } from "@rocket.chat/apps-engine/definition/accessors";
 import {
     ISlashCommand,
     SlashCommandContext,
 } from "@rocket.chat/apps-engine/definition/slashcommands";
-import { LlmService } from "../services/LlmService";
+import { initializeLlmService } from "../services/LlmService";
 
 export class AskCommand implements ISlashCommand {
     public command = "ask";
     public i18nDescription = "Ask a question to the LLM";
     public i18nParamsExample = "Your question";
     public providesPreview = false;
+    private readonly llmService: any;
+    private readonly accessors: IAppAccessors;
 
-    constructor(private readonly llmService: LlmService) {}
+    constructor(accessors: IAppAccessors) {
+        this.accessors = accessors;
+        this.llmService = initializeLlmService(accessors);
+    }
 
     public async executor(
         context: SlashCommandContext,
@@ -28,35 +34,61 @@ export class AskCommand implements ISlashCommand {
         const query = context.getArguments().join(" ");
         const room = context.getRoom();
         const userId = context.getSender().id;
+        const user = context.getSender();
+        const threadId = context.getThreadId();
 
-        const model = (await read
-            .getEnvironmentReader()
-            .getSettings()
-            .getValueById("llm_endpoint")) as string;
+        const llmService = await this.llmService;
+        const settings = llmService.settings;
 
-        const embedding = await this.llmService.createEmbedding(query);
+        try {
+            const embedding = await llmService.createEmbedding(
+                query,
+                room,
+                read,
+                user,
+                threadId,
+                http
+            );
 
-        const messageIds = await this.llmService.queryVectorDB(embedding);
+            const messageIds = await llmService.queryVectorDB(
+                embedding,
+                room,
+                read,
+                user,
+                threadId,
+                http,
+                settings.vectorDbEndpoint
+            );
 
-        const messages = await Promise.all(
-            messageIds.map((id) => this.llmService.getMessageById(id, read))
-        );
-        const contextText = messages.join(" ");
+            const messages = await Promise.all(
+                messageIds.map((id: string) =>
+                    llmService.getMessageById(read, id)
+                )
+            );
+            const contextText = messages.join(" ");
 
-        const combinedQuery = `Context: ${contextText}\n\nQuestion: ${query}`;
+            const combinedQuery = `Context: ${contextText}\n\nQuestion: ${query}`;
 
-        const response = await this.llmService.queryLLM(
-            model,
-            combinedQuery,
-            userId
-        );
+            const response = await llmService.queryLLM(
+                settings.llmEndpoint,
+                combinedQuery,
+                userId,
+                room,
+                user,
+                threadId,
+                http,
+                read
+            );
 
-        const builder = modify
-            .getCreator()
-            .startMessage()
-            .setRoom(room)
-            .setText(response);
+            const builder = modify
+                .getCreator()
+                .startMessage()
+                .setRoom(room)
+                .setText(response);
 
-        await modify.getCreator().finish(builder);
+            await modify.getCreator().finish(builder);
+        } catch (error) {
+            console.error(`Error executing ask command: ${error.message}`);
+        }
     }
 }

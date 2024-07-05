@@ -1,128 +1,126 @@
 import {
+    IAppAccessors,
     IHttp,
     IRead,
-    IEnvironmentRead,
-    IAppAccessors,
 } from "@rocket.chat/apps-engine/definition/accessors";
+import { IRoom } from "@rocket.chat/apps-engine/definition/rooms";
+import { IUser } from "@rocket.chat/apps-engine/definition/users";
+import { notifyMessage } from "./notifyMessage";
+import { getEndpoint } from "./endpointsConfig";
+import { initializeSettings } from "./settingsInitializer";
 
-export class LlmService {
-    private readonly endpoints = {
-        "llama3-70b": "http://llama3-70b/v1",
-        "mistral-7b": "http://mistral-7b/v1",
-    };
-    private vectorDbEndpoint: string;
-    private embeddingEndpoint: string =
-        "http://text-embedding-api:8020/embed_multiple";
+export async function createEmbedding(
+    text: string,
+    room: IRoom,
+    read: IRead,
+    user: IUser,
+    threadId: string,
+    http: IHttp
+): Promise<number[]> {
+    try {
+        const embeddingEndpoint =
+            "http://text-embedding-api:8020/embed_multiple";
+        const body = JSON.stringify([text]);
+        const response = await http.post(embeddingEndpoint, {
+            headers: {
+                accept: "application/json",
+                "Content-Type": "application/json",
+            },
+            content: body,
+        });
 
-    constructor(private readonly accessors: IAppAccessors) {
-        this.vectorDbEndpoint = "";
-        this.initializeSettings();
-    }
-
-    private async initializeSettings() {
-        this.vectorDbEndpoint =
-            ((await this.accessors.environmentReader
-                .getSettings()
-                .getValueById("vector_db_endpoint")) as string) || "";
-    }
-
-    public async queryLLM(
-        model: string,
-        prompt: string,
-        userId: string
-    ): Promise<string> {
-        const endpoint = this.endpoints[model];
-        if (!endpoint) {
-            throw new Error(`Unknown model: ${model}`);
+        if (!response.content) {
+            await notifyMessage(
+                room,
+                read,
+                user,
+                "Failed to fetch embedding",
+                threadId
+            );
+            throw new Error("Failed to fetch embedding");
         }
 
-        console.log(`Using LLM endpoint: ${endpoint}`);
+        return JSON.parse(response.content).embeddings[0];
+    } catch (error) {
+        await notifyMessage(
+            room,
+            read,
+            user,
+            `Error: ${error.message}`,
+            threadId
+        );
+        throw error;
+    }
+}
 
-        const headers = {
-            "Content-Type": "application/json",
-        };
+export async function queryLLM(
+    model: string,
+    prompt: string,
+    userId: string,
+    room: IRoom,
+    user: IUser,
+    threadId: string,
+    http: IHttp,
+    read: IRead
+): Promise<string> {
+    try {
+        const endpoint = getEndpoint(model);
 
-        const payload = {
-            messages: [{ role: "user", content: prompt, user: userId }],
+        const body = {
             model,
-        };
-
-        try {
-            const response = await this.accessors.http.post(
-                endpoint + "/chat/completions",
+            messages: [
                 {
-                    headers,
-                    data: payload,
-                }
-            );
-
-            if (response.statusCode !== 200 || !response.data) {
-                throw new Error("Failed to fetch response from LLM");
-            }
-
-            return response.data.choices[0].message.content.trim();
-        } catch (error) {
-            throw new Error(`LLM request failed: ${error.message}`);
-        }
-    }
-
-    public async createEmbedding(text: string): Promise<number[]> {
-        const headers = {
-            accept: "application/json",
-            "Content-Type": "application/json",
+                    role: "user",
+                    content: prompt,
+                    user: userId,
+                },
+            ],
         };
 
-        const data = JSON.stringify([text]);
-
-        try {
-            const response = await this.accessors.http.post(
-                this.embeddingEndpoint,
-                {
-                    headers,
-                    data,
-                }
-            );
-
-            if (response.statusCode !== 200 || !response.data) {
-                throw new Error("Failed to fetch embedding");
-            }
-
-            return response.data.embeddings[0];
-        } catch (error) {
-            throw new Error(`Embedding request failed: ${error.message}`);
-        }
-    }
-
-    public async storeMessageEmbedding(
-        messageId: string,
-        embedding: number[]
-    ): Promise<void> {
-        const url = `${this.vectorDbEndpoint}/v1/graphql`;
-        const content = {
-            query: `
-                mutation {
-                    CreateRocketChatDoc(
-                        input: {
-                            content: "${messageId}",
-                            vector: ${JSON.stringify(embedding)}
-                        }
-                    ) {
-                        id
-                    }
-                }
-            `,
-        };
-
-        await this.accessors.http.post(url, {
+        const response = await http.post(endpoint + "/chat/completions", {
             headers: {
                 "Content-Type": "application/json",
             },
-            content: JSON.stringify(content),
+            content: JSON.stringify(body),
         });
-    }
 
-    public async queryVectorDB(embedding: number[]): Promise<string[]> {
-        const url = `${this.vectorDbEndpoint}/v1/graphql`;
+        if (!response.content) {
+            await notifyMessage(
+                room,
+                read,
+                user,
+                "Something is wrong with AI. Please try again later",
+                threadId
+            );
+            throw new Error(
+                "Something is wrong with AI. Please try again later"
+            );
+        }
+
+        return JSON.parse(response.content).choices[0].message.content;
+    } catch (error) {
+        await notifyMessage(
+            room,
+            read,
+            user,
+            `Error: ${error.message}`,
+            threadId
+        );
+        throw error;
+    }
+}
+
+export async function queryVectorDB(
+    embedding: number[],
+    room: IRoom,
+    read: IRead,
+    user: IUser,
+    threadId: string,
+    http: IHttp,
+    vectorDbEndpoint: string
+): Promise<string[]> {
+    try {
+        const url = `${vectorDbEndpoint}/v1/graphql`;
         const content = {
             query: `{
                 Get {
@@ -143,34 +141,107 @@ export class LlmService {
             }`,
         };
 
-        const response = await this.accessors.http.post(url, {
+        const response = await http.post(url, {
             headers: {
                 "Content-Type": "application/json",
             },
             content: JSON.stringify(content),
         });
 
-        if (response.statusCode !== 200 || !response.data) {
+        if (!response.content) {
+            await notifyMessage(
+                room,
+                read,
+                user,
+                "Failed to fetch results from vector DB",
+                threadId
+            );
             throw new Error("Failed to fetch results from vector DB");
         }
 
-        return response.data.data.Get.RocketChatDocs.map(
+        return JSON.parse(response.content).data.Get.RocketChatDocs.map(
             (result: any) => result.content
         );
-    }
-
-    public async getMessageById(
-        messageId: string,
-        read: IRead
-    ): Promise<string> {
-        const message = await read.getMessageReader().getById(messageId);
-        if (!message || !message.text) {
-            throw new Error(
-                `Failed to fetch message text with ID ${messageId}`
-            );
-        }
-        return message.text;
+    } catch (error) {
+        await notifyMessage(
+            room,
+            read,
+            user,
+            `Error: ${error.message}`,
+            threadId
+        );
+        throw error;
     }
 }
 
-export default LlmService;
+export async function getMessageById(
+    read: IRead,
+    messageId: string
+): Promise<string> {
+    const message = await read.getMessageReader().getById(messageId);
+    if (!message || !message.text) {
+        throw new Error(`Failed to fetch message text with ID ${messageId}`);
+    }
+    return message.text;
+}
+
+export async function initializeLlmService(accessors: IAppAccessors) {
+    const settings = await initializeSettings(accessors);
+
+    return {
+        settings,
+        async queryLLM(
+            model: string,
+            prompt: string,
+            userId: string,
+            room: IRoom,
+            user: IUser,
+            threadId: string,
+            http: IHttp,
+            read: IRead
+        ): Promise<string> {
+            return queryLLM(
+                model,
+                prompt,
+                userId,
+                room,
+                user,
+                threadId,
+                http,
+                read
+            );
+        },
+        async createEmbedding(
+            text: string,
+            room: IRoom,
+            read: IRead,
+            user: IUser,
+            threadId: string,
+            http: IHttp
+        ): Promise<number[]> {
+            return createEmbedding(text, room, read, user, threadId, http);
+        },
+        async queryVectorDB(
+            embedding: number[],
+            room: IRoom,
+            read: IRead,
+            user: IUser,
+            threadId: string,
+            http: IHttp,
+            vectorDbEndpoint: string
+        ): Promise<string[]> {
+            return queryVectorDB(
+                embedding,
+                room,
+                read,
+                user,
+                threadId,
+                http,
+                vectorDbEndpoint
+            );
+        },
+        async getMessageById(read: IRead, messageId: string): Promise<string> {
+            return getMessageById(read, messageId);
+        },
+    };
+}

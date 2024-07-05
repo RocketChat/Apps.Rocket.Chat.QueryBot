@@ -6,16 +6,16 @@ import {
 import { App } from "@rocket.chat/apps-engine/definition/App";
 import { IAppInfo } from "@rocket.chat/apps-engine/definition/metadata";
 import { AskCommand } from "./src/commands/AskCommand";
-import { settings } from "./src//settings/AddSettings";
-import { LlmService } from "./src/services/LlmService";
+import { settings } from "./src/settings/AddSettings";
+import { initializeLlmService } from "./src/services/LlmService";
 import { PostMessageSentHandler } from "./src/handlers/PostMessageSentHandler";
 
 export class ChatBotApp extends App {
-    private llmService: LlmService;
+    private llmService: any;
 
     constructor(info: IAppInfo, logger: ILogger, accessors: IAppAccessors) {
         super(info, logger, accessors);
-        this.llmService = new LlmService(accessors);
+        this.llmService = initializeLlmService(accessors);
     }
 
     protected async extendConfiguration(
@@ -26,7 +26,7 @@ export class ChatBotApp extends App {
                 configuration.settings.provideSetting(setting)
             ),
             configuration.slashCommands.provideSlashCommand(
-                new AskCommand(this.llmService)
+                new AskCommand(this.getAccessors())
             ),
         ]);
 
@@ -34,7 +34,9 @@ export class ChatBotApp extends App {
             {
                 id: "postMessageSentHandler",
                 processor: async (jobContext, read, modify, http, persis) => {
-                    const handler = new PostMessageSentHandler(this.llmService);
+                    const handler = new PostMessageSentHandler(
+                        await this.llmService
+                    );
                     await handler.execute(
                         jobContext,
                         read,

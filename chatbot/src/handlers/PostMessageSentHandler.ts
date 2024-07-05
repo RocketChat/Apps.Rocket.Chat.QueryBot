@@ -2,14 +2,21 @@ import {
     IModify,
     IRead,
     IHttp,
+    IAppAccessors,
     IPersistence,
 } from "@rocket.chat/apps-engine/definition/accessors";
 import { IJobContext } from "@rocket.chat/apps-engine/definition/scheduler";
 import { IPostMessageSent } from "@rocket.chat/apps-engine/definition/messages";
-import { LlmService } from "../services/LlmService";
+import { initializeLlmService } from "../services/LlmService";
 
 export class PostMessageSentHandler {
-    constructor(private readonly llmService: LlmService) {}
+    private readonly llmService: any;
+    private readonly accessors: IAppAccessors;
+
+    constructor(accessors: IAppAccessors) {
+        this.accessors = accessors;
+        this.llmService = initializeLlmService(accessors);
+    }
 
     public async processMessageSent(
         jobContext: IJobContext,
@@ -30,7 +37,6 @@ export class PostMessageSentHandler {
         }
     }
 
-    // Add this method with the required signature
     public async execute(
         jobContext: IJobContext,
         read: IRead,
