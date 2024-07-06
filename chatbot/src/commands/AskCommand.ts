@@ -9,7 +9,10 @@ import {
     ISlashCommand,
     SlashCommandContext,
 } from "@rocket.chat/apps-engine/definition/slashcommands";
+import { IRoom } from "@rocket.chat/apps-engine/definition/rooms";
+import { IUser } from "@rocket.chat/apps-engine/definition/users";
 import { initializeLlmService } from "../services/LlmService";
+import { notifyMessage } from "../services/notifyMessage";
 
 export class AskCommand implements ISlashCommand {
     public command = "ask";
@@ -17,10 +20,8 @@ export class AskCommand implements ISlashCommand {
     public i18nParamsExample = "Your question";
     public providesPreview = false;
     private readonly llmService: any;
-    private readonly accessors: IAppAccessors;
 
     constructor(accessors: IAppAccessors) {
-        this.accessors = accessors;
         this.llmService = initializeLlmService(accessors);
     }
 
@@ -38,39 +39,37 @@ export class AskCommand implements ISlashCommand {
         const threadId = context.getThreadId();
 
         const llmService = await this.llmService;
-        const settings = llmService.settings;
 
         try {
-            const embedding = await llmService.createEmbedding(
-                query,
+            await this.sendMessage(
+                modify,
+                room,
+                "Processing your question...",
+                threadId
+            );
+
+            const contextText = threadId
+                ? await this.getThreadMessages(room, read, user, threadId)
+                : await this.getFallbackContext(room, read, user);
+
+            await notifyMessage(
                 room,
                 read,
                 user,
-                threadId,
-                http
+                `Context Text: ${contextText}`,
+                threadId
             );
-
-            const messageIds = await llmService.queryVectorDB(
-                embedding,
-                room,
-                read,
-                user,
-                threadId,
-                http,
-                settings.vectorDbEndpoint
-            );
-
-            const messages = await Promise.all(
-                messageIds.map((id: string) =>
-                    llmService.getMessageById(read, id)
-                )
-            );
-            const contextText = messages.join(" ");
 
             const combinedQuery = `Context: ${contextText}\n\nQuestion: ${query}`;
+            await notifyMessage(
+                room,
+                read,
+                user,
+                `Combined Query: ${combinedQuery}`,
+                threadId
+            );
 
             const response = await llmService.queryLLM(
-                settings.llmEndpoint,
                 combinedQuery,
                 userId,
                 room,
@@ -80,15 +79,99 @@ export class AskCommand implements ISlashCommand {
                 read
             );
 
-            const builder = modify
-                .getCreator()
-                .startMessage()
-                .setRoom(room)
-                .setText(response);
+            await notifyMessage(
+                room,
+                read,
+                user,
+                `LLM Response: ${response}`,
+                threadId
+            );
 
-            await modify.getCreator().finish(builder);
+            const formattedResponse = this.formatResponse(response);
+
+            await this.sendMessage(modify, room, formattedResponse, threadId);
         } catch (error) {
             console.error(`Error executing ask command: ${error.message}`);
+            console.error(`Error stack: ${error.stack}`);
+            await this.sendErrorMessage(modify, room, error.message, threadId);
         }
+    }
+
+    private async getThreadMessages(
+        room: IRoom,
+        read: IRead,
+        user: IUser,
+        threadId: string
+    ): Promise<string> {
+        const threadReader = read.getThreadReader();
+        const thread = await threadReader.getThreadById(threadId);
+
+        if (!thread) {
+            await notifyMessage(room, read, user, "Thread not found");
+            throw new Error("Thread not found");
+        }
+
+        const messageTexts: string[] = [];
+        for (const message of thread) {
+            if (message.text) {
+                messageTexts.push(`${message.sender.name}: ${message.text}`);
+            }
+        }
+
+        messageTexts.shift();
+
+        for (const messageText of messageTexts) {
+            await notifyMessage(room, read, user, messageText);
+        }
+
+        return messageTexts.join("\n");
+    }
+
+    private async getFallbackContext(
+        room: IRoom,
+        read: IRead,
+        user: IUser
+    ): Promise<string> {
+        const fallbackMessage =
+            "No threadId provided and no fallback context implemented.";
+        await notifyMessage(room, read, user, fallbackMessage);
+        return fallbackMessage;
+    }
+
+    private formatResponse(response: string): string {
+        return `Answer: ${response}`;
+    }
+
+    private async sendMessage(
+        modify: IModify,
+        room: any,
+        text: string,
+        threadId?: string
+    ): Promise<void> {
+        const builder = modify
+            .getCreator()
+            .startMessage()
+            .setRoom(room)
+            .setText(text);
+
+        if (threadId) {
+            builder.setThreadId(threadId);
+        }
+
+        await modify.getCreator().finish(builder);
+    }
+
+    private async sendErrorMessage(
+        modify: IModify,
+        room: any,
+        errorMessage: string,
+        threadId?: string
+    ): Promise<void> {
+        await this.sendMessage(
+            modify,
+            room,
+            `Error: ${errorMessage}`,
+            threadId
+        );
     }
 }

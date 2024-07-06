@@ -1,13 +1,25 @@
 import {
-    IAppAccessors,
     IHttp,
     IRead,
+    IAppAccessors,
 } from "@rocket.chat/apps-engine/definition/accessors";
 import { IRoom } from "@rocket.chat/apps-engine/definition/rooms";
 import { IUser } from "@rocket.chat/apps-engine/definition/users";
 import { notifyMessage } from "./notifyMessage";
 import { getEndpoint } from "./endpointsConfig";
-import { initializeSettings } from "./settingsInitializer";
+
+export async function initializeSettings(
+    accessors: IAppAccessors
+): Promise<{ vectorDbEndpoint: string; model: string }> {
+    const vectorDbEndpoint = (await accessors.environmentReader
+        .getSettings()
+        .getValueById("vector_db_endpoint")) as string;
+    const model = (await accessors.environmentReader
+        .getSettings()
+        .getValueById("model")) as string;
+
+    return { vectorDbEndpoint, model };
+}
 
 export async function createEmbedding(
     text: string,
@@ -29,7 +41,7 @@ export async function createEmbedding(
             content: body,
         });
 
-        if (!response.content) {
+        if (!response || !response.content) {
             await notifyMessage(
                 room,
                 read,
@@ -40,7 +52,12 @@ export async function createEmbedding(
             throw new Error("Failed to fetch embedding");
         }
 
-        return JSON.parse(response.content).embeddings[0];
+        const responseData = JSON.parse(response.content);
+        if (!responseData.embeddings || !responseData.embeddings[0]) {
+            throw new Error("Embedding response format is invalid");
+        }
+
+        return responseData.embeddings[0];
     } catch (error) {
         await notifyMessage(
             room,
@@ -84,7 +101,7 @@ export async function queryLLM(
             content: JSON.stringify(body),
         });
 
-        if (!response.content) {
+        if (!response || !response.content) {
             await notifyMessage(
                 room,
                 read,
@@ -92,12 +109,19 @@ export async function queryLLM(
                 "Something is wrong with AI. Please try again later",
                 threadId
             );
-            throw new Error(
-                "Something is wrong with AI. Please try again later"
-            );
+            throw new Error("Failed to fetch response from LLM");
         }
 
-        return JSON.parse(response.content).choices[0].message.content;
+        const responseData = JSON.parse(response.content);
+        if (
+            !responseData.choices ||
+            !responseData.choices[0] ||
+            !responseData.choices[0].message
+        ) {
+            throw new Error("LLM response format is invalid");
+        }
+
+        return responseData.choices[0].message.content;
     } catch (error) {
         await notifyMessage(
             room,
@@ -120,7 +144,7 @@ export async function queryVectorDB(
     vectorDbEndpoint: string
 ): Promise<string[]> {
     try {
-        const url = `${vectorDbEndpoint}/v1/graphql`;
+        const url = "http://weaviate:8080/v1/graphql";
         const content = {
             query: `{
                 Get {
@@ -132,6 +156,8 @@ export async function queryVectorDB(
                         limit: 5
                     ) {
                         content
+                        page_title
+                        url
                         _additional {
                             certainty
                             distance
@@ -148,7 +174,8 @@ export async function queryVectorDB(
             content: JSON.stringify(content),
         });
 
-        if (!response.content) {
+        if (!response || !response.content) {
+            console.error("Vector DB Response:", response);
             await notifyMessage(
                 room,
                 read,
@@ -159,10 +186,21 @@ export async function queryVectorDB(
             throw new Error("Failed to fetch results from vector DB");
         }
 
-        return JSON.parse(response.content).data.Get.RocketChatDocs.map(
+        const responseData = JSON.parse(response.content);
+        if (
+            !responseData.data ||
+            !responseData.data.Get ||
+            !responseData.data.Get.RocketChatDocs
+        ) {
+            console.error("Invalid Vector DB Response Format:", responseData);
+            throw new Error("Vector DB response format is invalid");
+        }
+
+        return responseData.data.Get.RocketChatDocs.map(
             (result: any) => result.content
         );
     } catch (error) {
+        console.error("Error querying Vector DB:", error);
         await notifyMessage(
             room,
             read,
@@ -191,7 +229,6 @@ export async function initializeLlmService(accessors: IAppAccessors) {
     return {
         settings,
         async queryLLM(
-            model: string,
             prompt: string,
             userId: string,
             room: IRoom,
@@ -201,7 +238,7 @@ export async function initializeLlmService(accessors: IAppAccessors) {
             read: IRead
         ): Promise<string> {
             return queryLLM(
-                model,
+                settings.model,
                 prompt,
                 userId,
                 room,
@@ -227,8 +264,7 @@ export async function initializeLlmService(accessors: IAppAccessors) {
             read: IRead,
             user: IUser,
             threadId: string,
-            http: IHttp,
-            vectorDbEndpoint: string
+            http: IHttp
         ): Promise<string[]> {
             return queryVectorDB(
                 embedding,
@@ -237,7 +273,7 @@ export async function initializeLlmService(accessors: IAppAccessors) {
                 user,
                 threadId,
                 http,
-                vectorDbEndpoint
+                settings.vectorDbEndpoint
             );
         },
         async getMessageById(read: IRead, messageId: string): Promise<string> {

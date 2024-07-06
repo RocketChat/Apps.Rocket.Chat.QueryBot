@@ -10,7 +10,7 @@ export async function initializeSettings(
     const llmEndpoint =
         ((await accessors.environmentReader
             .getSettings()
-            .getValueById("llm_endpoint")) as string) || "";
+            .getValueById("model")) as string) || "";
 
     return { vectorDbEndpoint, llmEndpoint };
 }
