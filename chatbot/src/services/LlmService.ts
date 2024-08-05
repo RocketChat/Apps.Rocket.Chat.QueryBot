@@ -2,6 +2,7 @@ import {
     IHttp,
     IRead,
     IAppAccessors,
+    ILogger,
 } from "@rocket.chat/apps-engine/definition/accessors";
 import { IRoom } from "@rocket.chat/apps-engine/definition/rooms";
 import { IUser } from "@rocket.chat/apps-engine/definition/users";
@@ -21,7 +22,7 @@ export async function initializeSettings(
     return { vectorDbEndpoint, model };
 }
 
-export async function createEmbedding(
+async function createEmbedding(
     text: string,
     room: IRoom,
     read: IRead,
@@ -30,15 +31,16 @@ export async function createEmbedding(
     http: IHttp
 ): Promise<number[]> {
     try {
-        const embeddingEndpoint =
-            "http://text-embedding-api:8020/embed_multiple";
-        const body = JSON.stringify([text]);
-        const response = await http.post(embeddingEndpoint, {
-            headers: {
-                accept: "application/json",
-                "Content-Type": "application/json",
-            },
-            content: body,
+        const EMBEDDING_URL = "http://text-embedding-api:8020/embed_multiple";
+        const headers = {
+            accept: "application/json",
+            "Content-Type": "application/json",
+        };
+        const data = JSON.stringify([text]);
+
+        const response = await http.post(EMBEDDING_URL, {
+            headers,
+            content: data,
         });
 
         if (!response || !response.content) {
@@ -46,7 +48,9 @@ export async function createEmbedding(
                 room,
                 read,
                 user,
-                "Failed to fetch embedding",
+                `Failed to fetch embedding. Response: ${JSON.stringify(
+                    response
+                )}`,
                 threadId
             );
             throw new Error("Failed to fetch embedding");
@@ -54,8 +58,27 @@ export async function createEmbedding(
 
         const responseData = JSON.parse(response.content);
         if (!responseData.embeddings || !responseData.embeddings[0]) {
+            await notifyMessage(
+                room,
+                read,
+                user,
+                `Invalid Embedding Response Format: ${JSON.stringify(
+                    responseData
+                )}`,
+                threadId
+            );
             throw new Error("Embedding response format is invalid");
         }
+
+        await notifyMessage(
+            room,
+            read,
+            user,
+            `Embedding Response Data: ${JSON.stringify(
+                responseData.embeddings[0]
+            )}`,
+            threadId
+        );
 
         return responseData.embeddings[0];
     } catch (error) {
@@ -63,14 +86,14 @@ export async function createEmbedding(
             room,
             read,
             user,
-            `Error: ${error.message}`,
+            `Error creating embedding: ${error.message}`,
             threadId
         );
         throw error;
     }
 }
 
-export async function queryLLM(
+async function queryLLM(
     model: string,
     prompt: string,
     userId: string,
@@ -134,30 +157,86 @@ export async function queryLLM(
     }
 }
 
-export async function queryVectorDB(
+async function createSchema(http: IHttp, logger: ILogger): Promise<void> {
+    try {
+        const schemaResponse = await http.get("http://weaviate:8080/v1/schema");
+
+        if (!schemaResponse || !schemaResponse.content) {
+            throw new Error(
+                "Failed to retrieve schema information from Weaviate"
+            );
+        }
+
+        const schemaData = JSON.parse(schemaResponse.content);
+
+        if (
+            schemaData &&
+            schemaData.classes &&
+            schemaData.classes.find((c: any) => c.class === "ChatBotDoc")
+        ) {
+            logger.info("Schema already exists, skipping creation");
+            return;
+        }
+
+        const schema = {
+            classes: [
+                {
+                    class: "ChatBotDoc",
+                    properties: [
+                        {
+                            name: "content",
+                            dataType: ["text"],
+                        },
+                        {
+                            name: "embedding",
+                            dataType: ["number[]"],
+                        },
+                    ],
+                },
+            ],
+        };
+
+        const response = await http.post("http://weaviate:8080/v1/schema", {
+            headers: {
+                "Content-Type": "application/json",
+            },
+            content: JSON.stringify(schema),
+        });
+
+        if (!response || !response.content) {
+            throw new Error("Failed to create schema in Weaviate");
+        }
+
+        logger.info("Schema created successfully");
+    } catch (error) {
+        logger.error(`Error creating schema: ${error.message}`);
+        throw error;
+    }
+}
+
+async function queryVectorDB(
     embedding: number[],
     room: IRoom,
     read: IRead,
     user: IUser,
     threadId: string,
     http: IHttp,
-    vectorDbEndpoint: string
+    logger: ILogger
 ): Promise<string[]> {
     try {
-        const url = "http://weaviate:8080/v1/graphql";
+        logger.info("Querying Vector DB with embedding", { embedding });
+
         const content = {
             query: `{
                 Get {
-                    RocketChatDocs(
+                    ChatBotDoc(
                         nearVector: {
                             vector: ${JSON.stringify(embedding)},
                             distance: 0.6
-                        }
+                        },
                         limit: 5
                     ) {
                         content
-                        page_title
-                        url
                         _additional {
                             certainty
                             distance
@@ -167,7 +246,7 @@ export async function queryVectorDB(
             }`,
         };
 
-        const response = await http.post(url, {
+        const response = await http.post("http://weaviate:8080/v1/graphql", {
             headers: {
                 "Content-Type": "application/json",
             },
@@ -175,7 +254,9 @@ export async function queryVectorDB(
         });
 
         if (!response || !response.content) {
-            console.error("Vector DB Response:", response);
+            logger.error(
+                "Failed to fetch results from vector DB. Response content is empty"
+            );
             await notifyMessage(
                 room,
                 read,
@@ -186,36 +267,129 @@ export async function queryVectorDB(
             throw new Error("Failed to fetch results from vector DB");
         }
 
+        logger.info("Query Vector DB Response Data", {
+            responseContent: response.content,
+        });
+
         const responseData = JSON.parse(response.content);
         if (
             !responseData.data ||
             !responseData.data.Get ||
-            !responseData.data.Get.RocketChatDocs
+            !responseData.data.Get.ChatBotDoc
         ) {
-            console.error("Invalid Vector DB Response Format:", responseData);
+            logger.error("Invalid Vector DB Response Format", { responseData });
+            await notifyMessage(
+                room,
+                read,
+                user,
+                `Invalid Vector DB Response Format: ${JSON.stringify(
+                    responseData
+                )}`,
+                threadId
+            );
             throw new Error("Vector DB response format is invalid");
         }
 
-        return responseData.data.Get.RocketChatDocs.map(
-            (result: any) => result.content
-        );
-    } catch (error) {
-        console.error("Error querying Vector DB:", error);
+        logger.info("Query Vector DB Response Data", {
+            responseData: responseData.data.Get.ChatBotDoc,
+        });
         await notifyMessage(
             room,
             read,
             user,
-            `Error: ${error.message}`,
+            `Vector DB Response Data: ${JSON.stringify(
+                responseData.data.Get.ChatBotDoc
+            )}`,
+            threadId
+        );
+
+        return responseData.data.Get.ChatBotDoc.map(
+            (result: any) => result.content
+        );
+    } catch (error) {
+        logger.error(`Error querying Vector DB: ${error.message}`, {
+            embedding,
+        });
+        await notifyMessage(
+            room,
+            read,
+            user,
+            `Error querying Vector DB: ${error.message}`,
             threadId
         );
         throw error;
     }
 }
 
-export async function getMessageById(
+async function storeChatBotDoc(
+    content: string,
+    embedding: number[],
+    room: IRoom,
     read: IRead,
-    messageId: string
-): Promise<string> {
+    user: IUser,
+    threadId: string,
+    http: IHttp,
+    logger: ILogger
+): Promise<void> {
+    try {
+        logger.info("Attempting to store document in vector DB");
+
+        const data = {
+            class: "ChatBotDoc",
+            properties: {
+                content,
+                embedding,
+            },
+        };
+
+        const response = await http.post("http://weaviate:8080/v1/objects", {
+            headers: {
+                "Content-Type": "application/json",
+            },
+            content: JSON.stringify(data),
+        });
+
+        if (!response || !response.content) {
+            logger.error(
+                "Failed to store document in vector DB. Response content is empty"
+            );
+            await notifyMessage(
+                room,
+                read,
+                user,
+                "Failed to store document in vector DB",
+                threadId
+            );
+            throw new Error("Failed to store document in vector DB");
+        }
+
+        logger.info("Document stored successfully in vector DB", {
+            responseStatus: response.statusCode,
+        });
+        await notifyMessage(
+            room,
+            read,
+            user,
+            `Document stored successfully in vector DB`,
+            threadId
+        );
+    } catch (error) {
+        logger.error(`Error storing document in Vector DB: ${error.message}`, {
+            contentSnippet: content.slice(0, 100),
+            embeddingLength: embedding.length,
+        });
+        await notifyMessage(
+            room,
+            read,
+            user,
+            `Error storing document in Vector DB: ${error.message}`,
+            threadId
+        );
+        throw error;
+    }
+}
+
+async function getMessageById(read: IRead, messageId: string): Promise<string> {
     const message = await read.getMessageReader().getById(messageId);
     if (!message || !message.text) {
         throw new Error(`Failed to fetch message text with ID ${messageId}`);
@@ -228,56 +402,39 @@ export async function initializeLlmService(accessors: IAppAccessors) {
 
     return {
         settings,
-        async queryLLM(
-            prompt: string,
-            userId: string,
-            room: IRoom,
-            user: IUser,
-            threadId: string,
-            http: IHttp,
-            read: IRead
-        ): Promise<string> {
-            return queryLLM(
-                settings.model,
-                prompt,
-                userId,
-                room,
-                user,
-                threadId,
-                http,
-                read
-            );
+        async createSchema(
+            ...args: Parameters<typeof createSchema>
+        ): Promise<void> {
+            const logger = args[args.length - 1] as ILogger;
+            logger.debug("Creating schema in Weaviate");
+            return createSchema(...args);
+        },
+        async queryLLM(...args: Parameters<typeof queryLLM>): Promise<string> {
+            return queryLLM(...args);
         },
         async createEmbedding(
-            text: string,
-            room: IRoom,
-            read: IRead,
-            user: IUser,
-            threadId: string,
-            http: IHttp
+            ...args: Parameters<typeof createEmbedding>
         ): Promise<number[]> {
-            return createEmbedding(text, room, read, user, threadId, http);
+            return createEmbedding(...args);
         },
         async queryVectorDB(
-            embedding: number[],
-            room: IRoom,
-            read: IRead,
-            user: IUser,
-            threadId: string,
-            http: IHttp
+            ...args: Parameters<typeof queryVectorDB>
         ): Promise<string[]> {
-            return queryVectorDB(
-                embedding,
-                room,
-                read,
-                user,
-                threadId,
-                http,
-                settings.vectorDbEndpoint
-            );
+            const logger = args[args.length - 1] as ILogger;
+            logger.debug("Querying Vector DB with embedding:");
+            return queryVectorDB(...args);
         },
-        async getMessageById(read: IRead, messageId: string): Promise<string> {
-            return getMessageById(read, messageId);
+        async storeChatBotDoc(
+            ...args: Parameters<typeof storeChatBotDoc>
+        ): Promise<void> {
+            const logger = args[args.length - 1] as ILogger;
+            logger.debug("Storing ChatBotDoc with args:");
+            return storeChatBotDoc(...args);
+        },
+        async getMessageById(
+            ...args: Parameters<typeof getMessageById>
+        ): Promise<string> {
+            return getMessageById(...args);
         },
     };
 }

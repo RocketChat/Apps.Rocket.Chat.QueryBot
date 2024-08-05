@@ -4,6 +4,7 @@ import {
     IPersistence,
     IRead,
     IAppAccessors,
+    ILogger,
 } from "@rocket.chat/apps-engine/definition/accessors";
 import {
     ISlashCommand,
@@ -13,6 +14,7 @@ import { IRoom } from "@rocket.chat/apps-engine/definition/rooms";
 import { IUser } from "@rocket.chat/apps-engine/definition/users";
 import { initializeLlmService } from "../services/LlmService";
 import { notifyMessage } from "../services/notifyMessage";
+import { type ChatBotApp } from "../../ChatBotApp";
 
 export class AskCommand implements ISlashCommand {
     public command = "ask";
@@ -21,7 +23,7 @@ export class AskCommand implements ISlashCommand {
     public providesPreview = false;
     private readonly llmService: any;
 
-    constructor(accessors: IAppAccessors) {
+    constructor(accessors: IAppAccessors, private app: ChatBotApp) {
         this.llmService = initializeLlmService(accessors);
     }
 
@@ -32,6 +34,7 @@ export class AskCommand implements ISlashCommand {
         http: IHttp,
         persis: IPersistence
     ): Promise<void> {
+        this.app.getLogger().debug("Executing AskCommand");
         const query = context.getArguments().join(" ");
         const room = context.getRoom();
         const userId = context.getSender().id;
@@ -41,16 +44,18 @@ export class AskCommand implements ISlashCommand {
         const llmService = await this.llmService;
 
         try {
-            await this.sendMessage(
-                modify,
+            await llmService.createSchema(http, this.app.getLogger());
+            await notifyMessage(
                 room,
+                read,
+                user,
                 "Processing your question...",
                 threadId
             );
 
             const contextText = threadId
                 ? await this.getThreadMessages(room, read, user, threadId)
-                : await this.getFallbackContext(room, read, user);
+                : "No thread ID provided";
 
             await notifyMessage(
                 room,
@@ -60,17 +65,74 @@ export class AskCommand implements ISlashCommand {
                 threadId
             );
 
-            const combinedQuery = `Context: ${contextText}\n\nQuestion: ${query}`;
+            // Embed the context
+            const contextEmbedding = await llmService.createEmbedding(
+                contextText,
+                room,
+                read,
+                user,
+                threadId,
+                http
+            );
+
+            // Store the context and its embedding
+            this.app.getLogger().debug("Storing ChatBotDoc");
+            await llmService.storeChatBotDoc(
+                contextText,
+                contextEmbedding,
+                room,
+                read,
+                user,
+                threadId,
+                http,
+                this.app.getLogger()
+            );
+
+            // Embed the question
+            const questionEmbedding = await llmService.createEmbedding(
+                query,
+                room,
+                read,
+                user,
+                threadId,
+                http
+            );
+
+            // Query the vector database with the embedded question
+            this.app
+                .getLogger()
+                .debug("Querying Vector DB with question embedding");
+            const relevantMessages = await llmService.queryVectorDB(
+                questionEmbedding,
+                room,
+                read,
+                user,
+                threadId,
+                http,
+                this.app.getLogger()
+            );
+
+            const contextFromDB = this.prepareContext(relevantMessages);
+
             await notifyMessage(
                 room,
                 read,
                 user,
-                `Combined Query: ${combinedQuery}`,
+                `Context from DB: ${contextFromDB}`,
+                threadId
+            );
+
+            const finalQuery = `Context: ${contextFromDB}\n\nQuestion: ${query}`;
+            await notifyMessage(
+                room,
+                read,
+                user,
+                `Final Query: ${finalQuery}`,
                 threadId
             );
 
             const response = await llmService.queryLLM(
-                combinedQuery,
+                `Context Text: ${contextText}, Question: ${query}`,
                 userId,
                 room,
                 user,
@@ -79,21 +141,12 @@ export class AskCommand implements ISlashCommand {
                 read
             );
 
-            await notifyMessage(
-                room,
-                read,
-                user,
-                `LLM Response: ${response}`,
-                threadId
-            );
-
             const formattedResponse = this.formatResponse(response);
 
-            await this.sendMessage(modify, room, formattedResponse, threadId);
+            await notifyMessage(room, read, user, formattedResponse, threadId);
         } catch (error) {
-            console.error(`Error executing ask command: ${error.message}`);
-            console.error(`Error stack: ${error.stack}`);
-            await this.sendErrorMessage(modify, room, error.message, threadId);
+            this.app.getLogger().error("Error executing ask command");
+            this.app.getLogger().error(error);
         }
     }
 
@@ -118,60 +171,14 @@ export class AskCommand implements ISlashCommand {
             }
         }
 
-        messageTexts.shift();
-
-        for (const messageText of messageTexts) {
-            await notifyMessage(room, read, user, messageText);
-        }
-
         return messageTexts.join("\n");
     }
 
-    private async getFallbackContext(
-        room: IRoom,
-        read: IRead,
-        user: IUser
-    ): Promise<string> {
-        const fallbackMessage =
-            "No threadId provided and no fallback context implemented.";
-        await notifyMessage(room, read, user, fallbackMessage);
-        return fallbackMessage;
+    private prepareContext(messages: string[]): string {
+        return messages.slice(0, 5).join("\n\n");
     }
 
     private formatResponse(response: string): string {
         return `Answer: ${response}`;
-    }
-
-    private async sendMessage(
-        modify: IModify,
-        room: any,
-        text: string,
-        threadId?: string
-    ): Promise<void> {
-        const builder = modify
-            .getCreator()
-            .startMessage()
-            .setRoom(room)
-            .setText(text);
-
-        if (threadId) {
-            builder.setThreadId(threadId);
-        }
-
-        await modify.getCreator().finish(builder);
-    }
-
-    private async sendErrorMessage(
-        modify: IModify,
-        room: any,
-        errorMessage: string,
-        threadId?: string
-    ): Promise<void> {
-        await this.sendMessage(
-            modify,
-            room,
-            `Error: ${errorMessage}`,
-            threadId
-        );
     }
 }

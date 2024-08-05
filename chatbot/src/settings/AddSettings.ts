@@ -25,6 +25,6 @@ export const settings: ISetting[] = [
         type: SettingType.STRING,
         required: true,
         public: true,
-        packageValue: "http://weaviate:8080/v1/graphql",
+        packageValue: "http://weaviate:8080",
     },
 ];

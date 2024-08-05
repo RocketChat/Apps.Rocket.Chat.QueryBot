@@ -16,6 +16,7 @@ export class ChatBotApp extends App {
     constructor(info: IAppInfo, logger: ILogger, accessors: IAppAccessors) {
         super(info, logger, accessors);
         this.llmService = initializeLlmService(accessors);
+        this.getLogger().debug("ChatBotApp has been initialized");
     }
 
     protected async extendConfiguration(
@@ -26,7 +27,7 @@ export class ChatBotApp extends App {
                 configuration.settings.provideSetting(setting)
             ),
             configuration.slashCommands.provideSlashCommand(
-                new AskCommand(this.getAccessors())
+                new AskCommand(this.getAccessors(), this)
             ),
         ]);
 
