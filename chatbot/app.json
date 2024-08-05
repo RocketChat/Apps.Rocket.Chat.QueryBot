@@ -12,5 +12,37 @@
     "nameSlug": "chatbot",
     "classFile": "ChatBotApp.ts",
     "description": "A flexible AI query bot for any problem domain.",
-    "implements": []
+    "implements": [],
+    "permissions": [
+        {
+            "name": "user.read"
+        },
+        {
+            "name": "user.write"
+        },
+        {
+            "name": "room.read"
+        },
+        {
+            "name": "room.write"
+        },
+        {
+            "name": "message.read"
+        },
+        {
+            "name": "message.write"
+        },
+        {
+            "name": "slashcommand"
+        },
+        {
+            "name": "api"
+        },
+        {
+            "name": "networking"
+        },
+        {
+            "name": "threads.read"
+        }
+    ]
 }
