@@ -74,9 +74,7 @@ async function createEmbedding(
             room,
             read,
             user,
-            `Embedding Response Data: ${JSON.stringify(
-                responseData.embeddings[0]
-            )}`,
+            "Embedding created successfully",
             threadId
         );
 
@@ -93,7 +91,7 @@ async function createEmbedding(
     }
 }
 
-async function queryLLM(
+export async function queryLLM(
     model: string,
     prompt: string,
     userId: string,
@@ -101,18 +99,17 @@ async function queryLLM(
     user: IUser,
     threadId: string,
     http: IHttp,
-    read: IRead
+    logger: ILogger
 ): Promise<string> {
     try {
-        const endpoint = getEndpoint(model);
+        const endpoint = "http://llama3-70b/v1";
 
         const body = {
             model,
             messages: [
                 {
-                    role: "user",
+                    role: "system",
                     content: prompt,
-                    user: userId,
                 },
             ],
         };
@@ -125,12 +122,9 @@ async function queryLLM(
         });
 
         if (!response || !response.content) {
-            await notifyMessage(
-                room,
-                read,
-                user,
-                "Something is wrong with AI. Please try again later",
-                threadId
+            logger.error(
+                "Failed to fetch response from LLM. Response:",
+                response
             );
             throw new Error("Failed to fetch response from LLM");
         }
@@ -141,18 +135,16 @@ async function queryLLM(
             !responseData.choices[0] ||
             !responseData.choices[0].message
         ) {
+            logger.error(
+                "LLM response format is invalid. Response data:",
+                responseData
+            );
             throw new Error("LLM response format is invalid");
         }
 
         return responseData.choices[0].message.content;
     } catch (error) {
-        await notifyMessage(
-            room,
-            read,
-            user,
-            `Error: ${error.message}`,
-            threadId
-        );
+        logger.error("Error querying LLM:", error);
         throw error;
     }
 }
@@ -169,14 +161,14 @@ async function createSchema(http: IHttp, logger: ILogger): Promise<void> {
 
         const schemaData = JSON.parse(schemaResponse.content);
 
-        if (
-            schemaData &&
-            schemaData.classes &&
-            schemaData.classes.find((c: any) => c.class === "ChatBotDoc")
-        ) {
-            logger.info("Schema already exists, skipping creation");
-            return;
-        }
+        // if (
+        //     schemaData &&
+        //     schemaData.classes &&
+        //     schemaData.classes.find((c: any) => c.class === "ChatBotDoc")
+        // ) {
+        //     logger.info("Schema already exists, skipping creation");
+        //     return;
+        // }
 
         const schema = {
             classes: [
@@ -188,8 +180,8 @@ async function createSchema(http: IHttp, logger: ILogger): Promise<void> {
                             dataType: ["text"],
                         },
                         {
-                            name: "embedding",
-                            dataType: ["number[]"],
+                            name: "roomId",
+                            dataType: ["string"],
                         },
                     ],
                 },
@@ -207,7 +199,7 @@ async function createSchema(http: IHttp, logger: ILogger): Promise<void> {
             throw new Error("Failed to create schema in Weaviate");
         }
 
-        logger.info("Schema created successfully");
+        logger.info("Schema created successfully", response.content);
     } catch (error) {
         logger.error(`Error creating schema: ${error.message}`);
         throw error;
@@ -224,7 +216,9 @@ async function queryVectorDB(
     logger: ILogger
 ): Promise<string[]> {
     try {
-        logger.info("Querying Vector DB with embedding", { embedding });
+        logger.info("Querying Vector DB with embedding", {
+            embeddingLength: embedding.length,
+        });
 
         const content = {
             query: `{
@@ -234,7 +228,12 @@ async function queryVectorDB(
                             vector: ${JSON.stringify(embedding)},
                             distance: 0.6
                         },
-                        limit: 5
+                        where: {
+                            path: ["roomId"],
+                            operator: Equal,
+                            valueString: "${room.id}"
+                        },
+                        limit: 3
                     ) {
                         content
                         _additional {
@@ -338,8 +337,9 @@ async function storeChatBotDoc(
             class: "ChatBotDoc",
             properties: {
                 content,
-                embedding,
+                roomId: room.id,
             },
+            vector: embedding,
         };
 
         const response = await http.post("http://weaviate:8080/v1/objects", {
@@ -421,7 +421,7 @@ export async function initializeLlmService(accessors: IAppAccessors) {
             ...args: Parameters<typeof queryVectorDB>
         ): Promise<string[]> {
             const logger = args[args.length - 1] as ILogger;
-            logger.debug("Querying Vector DB with embedding:");
+            logger.debug("Querying Vector DB with embedding");
             return queryVectorDB(...args);
         },
         async storeChatBotDoc(

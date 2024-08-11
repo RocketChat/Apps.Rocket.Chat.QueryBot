@@ -11,6 +11,7 @@ import {
     SlashCommandContext,
 } from "@rocket.chat/apps-engine/definition/slashcommands";
 import { IRoom } from "@rocket.chat/apps-engine/definition/rooms";
+import { IMessageRaw } from "@rocket.chat/apps-engine/definition/messages";
 import { IUser } from "@rocket.chat/apps-engine/definition/users";
 import { initializeLlmService } from "../services/LlmService";
 import { notifyMessage } from "../services/notifyMessage";
@@ -53,42 +54,8 @@ export class AskCommand implements ISlashCommand {
                 threadId
             );
 
-            const contextText = threadId
-                ? await this.getThreadMessages(room, read, user, threadId)
-                : "No thread ID provided";
+            await this.processRoomMessages(room, read, http, user, threadId);
 
-            await notifyMessage(
-                room,
-                read,
-                user,
-                `Context Text: ${contextText}`,
-                threadId
-            );
-
-            // Embed the context
-            const contextEmbedding = await llmService.createEmbedding(
-                contextText,
-                room,
-                read,
-                user,
-                threadId,
-                http
-            );
-
-            // Store the context and its embedding
-            this.app.getLogger().debug("Storing ChatBotDoc");
-            await llmService.storeChatBotDoc(
-                contextText,
-                contextEmbedding,
-                room,
-                read,
-                user,
-                threadId,
-                http,
-                this.app.getLogger()
-            );
-
-            // Embed the question
             const questionEmbedding = await llmService.createEmbedding(
                 query,
                 room,
@@ -98,10 +65,6 @@ export class AskCommand implements ISlashCommand {
                 http
             );
 
-            // Query the vector database with the embedded question
-            this.app
-                .getLogger()
-                .debug("Querying Vector DB with question embedding");
             const relevantMessages = await llmService.queryVectorDB(
                 questionEmbedding,
                 room,
@@ -132,13 +95,14 @@ export class AskCommand implements ISlashCommand {
             );
 
             const response = await llmService.queryLLM(
-                `Context Text: ${contextText}, Question: ${query}`,
+                finalQuery,
                 userId,
                 room,
                 user,
                 threadId,
                 http,
-                read
+                read,
+                this.app.getLogger()
             );
 
             const formattedResponse = this.formatResponse(response);
@@ -150,28 +114,52 @@ export class AskCommand implements ISlashCommand {
         }
     }
 
-    private async getThreadMessages(
+    private async processRoomMessages(
         room: IRoom,
         read: IRead,
+        http: IHttp,
         user: IUser,
-        threadId: string
-    ): Promise<string> {
-        const threadReader = read.getThreadReader();
-        const thread = await threadReader.getThreadById(threadId);
+        threadId?: string
+    ): Promise<void> {
+        const messages: IMessageRaw[] = await read
+            .getRoomReader()
+            .getMessages(room.id, {
+                limit: 100,
+            });
 
-        if (!thread) {
-            await notifyMessage(room, read, user, "Thread not found");
-            throw new Error("Thread not found");
-        }
+        const llmService = await this.llmService;
 
-        const messageTexts: string[] = [];
-        for (const message of thread) {
+        for (const message of messages) {
             if (message.text) {
-                messageTexts.push(`${message.sender.name}: ${message.text}`);
+                // Create an embedding for each individual message
+                const embedding = await llmService.createEmbedding(
+                    message.text,
+                    room,
+                    read,
+                    user,
+                    threadId,
+                    http
+                );
+
+                // Store the message text and its embedding in the vector database
+                await llmService.storeChatBotDoc(
+                    message.text,
+                    embedding,
+                    room,
+                    read,
+                    user,
+                    threadId,
+                    http,
+                    this.app.getLogger()
+                );
+
+                this.app
+                    .getLogger()
+                    .debug(
+                        `Stored message: "${message.text}" with embedding length: ${embedding.length}`
+                    );
             }
         }
-
-        return messageTexts.join("\n");
     }
 
     private prepareContext(messages: string[]): string {
