@@ -77,14 +77,6 @@ export class AskCommand implements ISlashCommand {
 
             const contextFromDB = this.prepareContext(relevantMessages);
 
-            await notifyMessage(
-                room,
-                read,
-                user,
-                `Context from DB: ${contextFromDB}`,
-                threadId
-            );
-
             const finalQuery = `Context: ${contextFromDB}\n\nQuestion: ${query}`;
             await notifyMessage(
                 room,
@@ -131,7 +123,6 @@ export class AskCommand implements ISlashCommand {
 
         for (const message of messages) {
             if (message.text) {
-                // Create an embedding for each individual message
                 const embedding = await llmService.createEmbedding(
                     message.text,
                     room,
@@ -141,7 +132,6 @@ export class AskCommand implements ISlashCommand {
                     http
                 );
 
-                // Store the message text and its embedding in the vector database
                 await llmService.storeChatBotDoc(
                     message.text,
                     embedding,

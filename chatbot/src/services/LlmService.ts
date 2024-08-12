@@ -70,14 +70,6 @@ async function createEmbedding(
             throw new Error("Embedding response format is invalid");
         }
 
-        await notifyMessage(
-            room,
-            read,
-            user,
-            "Embedding created successfully",
-            threadId
-        );
-
         return responseData.embeddings[0];
     } catch (error) {
         await notifyMessage(
@@ -198,8 +190,6 @@ async function createSchema(http: IHttp, logger: ILogger): Promise<void> {
         if (!response || !response.content) {
             throw new Error("Failed to create schema in Weaviate");
         }
-
-        logger.info("Schema created successfully", response.content);
     } catch (error) {
         logger.error(`Error creating schema: ${error.message}`);
         throw error;
@@ -362,17 +352,6 @@ async function storeChatBotDoc(
             );
             throw new Error("Failed to store document in vector DB");
         }
-
-        logger.info("Document stored successfully in vector DB", {
-            responseStatus: response.statusCode,
-        });
-        await notifyMessage(
-            room,
-            read,
-            user,
-            `Document stored successfully in vector DB`,
-            threadId
-        );
     } catch (error) {
         logger.error(`Error storing document in Vector DB: ${error.message}`, {
             contentSnippet: content.slice(0, 100),
