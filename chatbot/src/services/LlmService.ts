@@ -8,6 +8,7 @@ import { IRoom } from "@rocket.chat/apps-engine/definition/rooms";
 import { IUser } from "@rocket.chat/apps-engine/definition/users";
 import { notifyMessage } from "./notifyMessage";
 import { getEndpoint } from "./endpointsConfig";
+import { App } from "@rocket.chat/apps-engine/definition/App";
 
 export async function initializeSettings(
     accessors: IAppAccessors
@@ -84,17 +85,17 @@ async function createEmbedding(
 }
 
 export async function queryLLM(
-    model: string,
+    app: App,
     prompt: string,
-    userId: string,
-    room: IRoom,
-    user: IUser,
-    threadId: string,
     http: IHttp,
     logger: ILogger
 ): Promise<string> {
     try {
-        const endpoint = "http://llama3-70b/v1";
+        const model = await app
+            .getAccessors()
+            .environmentReader.getSettings()
+            .getValueById("model");
+        const endpoint = getEndpoint(model);
 
         const body = {
             model,
@@ -172,6 +173,10 @@ async function createSchema(http: IHttp, logger: ILogger): Promise<void> {
                             dataType: ["text"],
                         },
                         {
+                            name: "messageId",
+                            dataType: ["string"],
+                        },
+                        {
                             name: "roomId",
                             dataType: ["string"],
                         },
@@ -193,6 +198,62 @@ async function createSchema(http: IHttp, logger: ILogger): Promise<void> {
     } catch (error) {
         logger.error(`Error creating schema: ${error.message}`);
         throw error;
+    }
+}
+
+async function isMessageStored(
+    messageId: string,
+    room: IRoom,
+    http: IHttp,
+    logger: ILogger
+): Promise<boolean> {
+    try {
+        const content = {
+            query: `{
+                Get {
+                    ChatBotDoc(
+                        where: {
+                            path: ["roomId"],
+                            operator: Equal,
+                            valueString: "${room.id}"
+                        }
+                        where: {
+                            path: ["id"],
+                            operator: Equal,
+                            valueString: "${messageId}"
+                        }
+                        limit: 1
+                    ) {
+                        id
+                    }
+                }
+            }`,
+        };
+
+        const response = await http.post("http://weaviate:8080/v1/graphql", {
+            headers: {
+                "Content-Type": "application/json",
+            },
+            content: JSON.stringify(content),
+        });
+
+        if (!response || !response.content) {
+            logger.error(
+                "Failed to check message existence in vector DB. Response content is empty"
+            );
+            return false;
+        }
+
+        const responseData = JSON.parse(response.content);
+        return (
+            responseData.data &&
+            responseData.data.Get &&
+            responseData.data.Get.ChatBotDoc &&
+            responseData.data.Get.ChatBotDoc.length > 0
+        );
+    } catch (error) {
+        logger.error(`Error checking message in Vector DB: ${error.message}`);
+        return false;
     }
 }
 
@@ -256,10 +317,6 @@ async function queryVectorDB(
             throw new Error("Failed to fetch results from vector DB");
         }
 
-        logger.info("Query Vector DB Response Data", {
-            responseContent: response.content,
-        });
-
         const responseData = JSON.parse(response.content);
         if (
             !responseData.data ||
@@ -278,19 +335,6 @@ async function queryVectorDB(
             );
             throw new Error("Vector DB response format is invalid");
         }
-
-        logger.info("Query Vector DB Response Data", {
-            responseData: responseData.data.Get.ChatBotDoc,
-        });
-        await notifyMessage(
-            room,
-            read,
-            user,
-            `Vector DB Response Data: ${JSON.stringify(
-                responseData.data.Get.ChatBotDoc
-            )}`,
-            threadId
-        );
 
         return responseData.data.Get.ChatBotDoc.map(
             (result: any) => result.content
@@ -312,6 +356,7 @@ async function queryVectorDB(
 
 async function storeChatBotDoc(
     content: string,
+    messageId: string,
     embedding: number[],
     room: IRoom,
     read: IRead,
@@ -327,6 +372,7 @@ async function storeChatBotDoc(
             class: "ChatBotDoc",
             properties: {
                 content,
+                messageId: messageId,
                 roomId: room.id,
             },
             vector: embedding,
@@ -409,6 +455,11 @@ export async function initializeLlmService(accessors: IAppAccessors) {
             const logger = args[args.length - 1] as ILogger;
             logger.debug("Storing ChatBotDoc with args:");
             return storeChatBotDoc(...args);
+        },
+        async isMessageStored(
+            ...args: Parameters<typeof isMessageStored>
+        ): Promise<boolean> {
+            return isMessageStored(...args);
         },
         async getMessageById(
             ...args: Parameters<typeof getMessageById>

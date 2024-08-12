@@ -35,10 +35,8 @@ export class AskCommand implements ISlashCommand {
         http: IHttp,
         persis: IPersistence
     ): Promise<void> {
-        this.app.getLogger().debug("Executing AskCommand");
         const query = context.getArguments().join(" ");
         const room = context.getRoom();
-        const userId = context.getSender().id;
         const user = context.getSender();
         const threadId = context.getThreadId();
 
@@ -78,22 +76,11 @@ export class AskCommand implements ISlashCommand {
             const contextFromDB = this.prepareContext(relevantMessages);
 
             const finalQuery = `Context: ${contextFromDB}\n\nQuestion: ${query}`;
-            await notifyMessage(
-                room,
-                read,
-                user,
-                `Final Query: ${finalQuery}`,
-                threadId
-            );
 
             const response = await llmService.queryLLM(
+                this.app,
                 finalQuery,
-                userId,
-                room,
-                user,
-                threadId,
                 http,
-                read,
                 this.app.getLogger()
             );
 
@@ -123,31 +110,50 @@ export class AskCommand implements ISlashCommand {
 
         for (const message of messages) {
             if (message.text) {
-                const embedding = await llmService.createEmbedding(
-                    message.text,
+                // Check if the message has already been stored
+                const isStored = await llmService.isMessageStored(
+                    message.id,
                     room,
-                    read,
-                    user,
-                    threadId,
-                    http
-                );
-
-                await llmService.storeChatBotDoc(
-                    message.text,
-                    embedding,
-                    room,
-                    read,
-                    user,
-                    threadId,
                     http,
                     this.app.getLogger()
                 );
 
-                this.app
-                    .getLogger()
-                    .debug(
-                        `Stored message: "${message.text}" with embedding length: ${embedding.length}`
+                if (!isStored) {
+                    // Create an embedding for each individual message
+                    const embedding = await llmService.createEmbedding(
+                        message.text,
+                        room,
+                        read,
+                        user,
+                        threadId || "",
+                        http
                     );
+
+                    // Store the message text and its embedding in the vector database
+                    await llmService.storeChatBotDoc(
+                        message.text,
+                        message.id,
+                        embedding,
+                        room,
+                        read,
+                        user,
+                        threadId || "",
+                        http,
+                        this.app.getLogger()
+                    );
+
+                    this.app
+                        .getLogger()
+                        .debug(
+                            `Stored message: "${message.text}" with embedding length: ${embedding.length}`
+                        );
+                } else {
+                    this.app
+                        .getLogger()
+                        .debug(
+                            `Message: "${message.text}" already stored, skipping.`
+                        );
+                }
             }
         }
     }
