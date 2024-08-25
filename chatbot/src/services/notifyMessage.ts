@@ -7,12 +7,19 @@ export async function notifyMessage(
     read: IRead,
     user: IUser,
     message: string,
-    threadId?: string
+    threadId?: string,
+    username?: string,
+    avatarUrl?: string
 ): Promise<void> {
     const notifier = read.getNotifier();
     const messageBuilder = notifier.getMessageBuilder();
+
     messageBuilder.setText(message);
     messageBuilder.setRoom(room);
+    messageBuilder.setUsernameAlias("Chat Assistant");
+    messageBuilder.setAvatarUrl(
+        "https://cdn-icons-png.flaticon.com/512/8943/8943377.png"
+    );
 
     if (threadId) {
         messageBuilder.setThreadId(threadId);

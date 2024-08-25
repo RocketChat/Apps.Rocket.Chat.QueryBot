@@ -18,6 +18,16 @@ export const settings: ISetting[] = [
         packageValue: "llama3-70b",
     },
     {
+        id: "vector_db_name",
+        i18nLabel: "Vector DB Name",
+        i18nDescription:
+            "Name of the vector database you are using (e.g., Weaviate, Milvus).",
+        type: SettingType.STRING,
+        required: true,
+        public: true,
+        packageValue: "Weaviate",
+    },
+    {
         id: "vector_db_endpoint",
         i18nLabel: "Vector DB Endpoint",
         i18nDescription:

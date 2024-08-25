@@ -48,7 +48,7 @@ export class AskCommand implements ISlashCommand {
                 room,
                 read,
                 user,
-                "Processing your question...",
+                `**Your Question: ${query}**`,
                 threadId
             );
 
@@ -75,18 +75,25 @@ export class AskCommand implements ISlashCommand {
 
             const contextFromDB = this.prepareContext(relevantMessages);
 
-            const finalQuery = `Context: ${contextFromDB}\n\nQuestion: ${query}`;
+            const prompt = `
+                You are an expert assistant. Here is the context:
+                ${contextFromDB}
+                
+                Please answer the following question in a clear and thorough manner:
+                
+                Question: ${query}
+                
+                Format the answer in markdown, including bullet points or numbered lists if applicable.
+            `;
 
             const response = await llmService.queryLLM(
                 this.app,
-                finalQuery,
+                prompt,
                 http,
                 this.app.getLogger()
             );
 
-            const formattedResponse = this.formatResponse(response);
-
-            await notifyMessage(room, read, user, formattedResponse, threadId);
+            await notifyMessage(room, read, user, response, threadId);
         } catch (error) {
             this.app.getLogger().error("Error executing ask command");
             this.app.getLogger().error(error);
@@ -160,9 +167,5 @@ export class AskCommand implements ISlashCommand {
 
     private prepareContext(messages: string[]): string {
         return messages.slice(0, 5).join("\n\n");
-    }
-
-    private formatResponse(response: string): string {
-        return `Answer: ${response}`;
     }
 }
