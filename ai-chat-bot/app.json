@@ -1,0 +1,51 @@
+{
+    "id": "5c126111-1aaf-4953-ab26-74a6c94446b7",
+    "version": "0.0.1",
+    "requiredApiVersion": "^1.19.0",
+    "iconFile": "icon.png",
+    "author": {
+        "name": "Hunter Xia",
+        "homepage": "https://rocket.chat/",
+        "support": "support@rocket.chat"
+    },
+    "name": "AI Chat Bot",
+    "nameSlug": "ai-chat-bot",
+    "classFile": "AiChatBotApp.ts",
+    "description": "The AI Query Bot transforms Rocket.Chat into a powerful personal assistant.",
+    "permissions": [
+        {
+            "name": "user.read"
+        },
+        {
+            "name": "user.write"
+        },
+        {
+            "name": "room.read"
+        },
+        {
+            "name": "room.write"
+        },
+        {
+            "name": "message.read"
+        },
+        {
+            "name": "message.write"
+        },
+        {
+            "name": "slashcommand"
+        },
+        {
+            "name": "api"
+        },
+        {
+            "name": "networking"
+        },
+        {
+            "name": "threads.read"
+        },
+        {
+            "name": "upload.read"
+        }
+    ],
+    "implements": []
+}
