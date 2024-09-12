@@ -75,6 +75,16 @@ export class AskCommand implements ISlashCommand {
 
             const contextFromDB = this.prepareContext(relevantMessages);
 
+            let customStyle = await read
+                .getEnvironmentReader()
+                .getSettings()
+                .getValueById("custom_prompt");
+
+            const defaultStyle =
+                "Please format the answer in markdown, including bullet points or numbered lists if applicable.";
+
+            const style = customStyle || defaultStyle;
+
             const prompt = `
                 You are an expert assistant. Here is the context:
                 ${contextFromDB}
@@ -83,7 +93,7 @@ export class AskCommand implements ISlashCommand {
                 
                 Question: ${query}
                 
-                Format the answer in markdown, including bullet points or numbered lists if applicable.
+                ${style}
             `;
 
             const response = await llmService.queryLLM(
