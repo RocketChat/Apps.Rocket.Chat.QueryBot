@@ -25,7 +25,7 @@ Format responses in markdown, allowing for rich text outputs including bullet po
 <h2 >How to set up 💻</h2>
 
 <ol>
-  <li>Have a Rocket.Chat server ready. If you don't have a server, see this <a href="https://developer.rocket.chat/rocket.chat/rocket-chat-environment-setup">guide</a>.</li> 
+  <li>Have a Rocket.Chat server ready. If you don't have a server, see this <a href="https://developer.rocket.chat/v1/docs/server-environment-setup">guide</a>.</li> 
   <li>Install the Rocket.Chat Apps Engline CLI. 
   
   ``` 
